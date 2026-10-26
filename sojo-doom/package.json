@@ -1,0 +1,22 @@
+{
+  "name": "sojo-doom",
+  "version": "1.0.0",
+  "description": "",
+  "main": "build.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@sojogg/sdk": "^0.1.11",
+    "esbuild": "^0.28.2"
+  },
+  "devDependencies": {
+    "ffmpeg-static": "^5.3.0",
+    "playwright": "^1.62.1",
+    "pngjs": "^7.0.0"
+  }
+}

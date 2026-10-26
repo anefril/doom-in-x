@@ -1,0 +1,17 @@
+[
+  ["ArrowUp", 1300],
+  ["wait", 300],
+  ["ArrowRight", 330],
+  ["ArrowUp", 700],
+  ["aim", 0],
+  ["Space", 120, 300],
+  ["Space", 120, 300],
+  ["aim", 0],
+  ["Space", 120, 300],
+  ["Space", 120, 300],
+  ["wait", 1000],
+  ["ArrowLeft", 1100],
+  ["ArrowUp", 1300],
+  ["Space", 120, 300],
+  ["Space", 120, 300]
+]

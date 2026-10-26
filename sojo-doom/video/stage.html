@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>DOOM on Sojo — promo stage</title>
+<style>
+/* Promo video stage 1080×1350 (4:5 — X feed format): a mock of the real @NukeKevDev post, the card holds the live game
+   from doom.sojo.gg. Titles and the cursor are drawn here (Playwright doesn't record the cursor). */
+*{box-sizing:border-box}
+html,body{margin:0;width:1080px;height:1350px;overflow:hidden;background:#000;color:#e7e9ea;
+  font-family:"Segoe UI",system-ui,-apple-system,sans-serif}
+#feed{position:absolute;inset:0;display:flex;align-items:center;justify-content:center}
+.tweet{width:1000px;padding:28px 30px 18px;border:1px solid #2f3336;border-radius:22px;background:#000}
+.head{display:flex;align-items:center;gap:16px}
+.head img{width:74px;height:74px;border-radius:50%}
+.name{font-weight:700;font-size:30px}
+.handle{color:#71767b;font-size:27px}
+.text{font-size:31px;line-height:1.38;margin:20px 0 22px;white-space:pre-line}
+.text a{color:#1d9bf0;text-decoration:none}
+.card{position:relative;width:940px;height:588px;border:1px solid #2f3336;border-radius:20px;overflow:hidden;background:#000}
+.card iframe{width:100%;height:100%;border:0;display:block}
+.dom{color:#71767b;font-size:24px;margin:10px 4px 0}
+.acts{display:flex;justify-content:space-between;color:#71767b;font-size:25px;margin:18px 10px 0}
+.acts span{display:flex;gap:10px;align-items:center}
+.acts b{font-weight:400}
+#tag{position:absolute;left:50%;bottom:44px;transform:translateX(-50%);display:flex;gap:12px;align-items:center;
+  padding:12px 22px;border-radius:999px;background:#16181c;border:1px solid #2f3336;font-size:26px;color:#e7e9ea;
+  opacity:0;transition:opacity .6s}
+#tag i{width:14px;height:14px;border-radius:50%;background:#e33;box-shadow:0 0 12px #f33}
+#tag.on{opacity:1}
+.full{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:26px;
+  text-align:center;background:radial-gradient(circle at 50% 42%,#4a0909,#0b0000 70%);transition:opacity .8s;z-index:20}
+.full.off{opacity:0;pointer-events:none}
+.big{font-family:Impact,"Arial Black",sans-serif;font-size:180px;line-height:1;color:#e33;letter-spacing:8px;
+  text-shadow:0 10px 0 #600,0 0 50px #f30}
+.sub{font-size:46px;font-weight:700;max-width:900px;line-height:1.25}
+.small{font-size:32px;color:#c9c9c9}
+.url{font:700 52px monospace;color:#fc3}
+#cur{position:absolute;left:0;top:0;width:34px;height:34px;z-index:30;pointer-events:none;opacity:0;
+  transition:transform .9s cubic-bezier(.4,.1,.2,1),opacity .3s}
+#cur svg{filter:drop-shadow(0 2px 3px #000)}
+#cur.click svg{transform:scale(.8)}
+</style>
+</head>
+<body>
+<div id="feed">
+  <div class="tweet">
+    <div class="head"><img src="pfp.jpg" alt=""><div><div class="name">Looser</div><div class="handle">@NukeKevDev · now</div></div></div>
+    <div class="text">DOOM (1993) now runs right inside your X feed 🔫
+
+No download, no install. Tap and play E1M1 in the post.
+Works on desktop and phone.
+
+<a>doom.sojo.gg</a></div>
+    <div class="card"><iframe id="game" allow="autoplay; fullscreen; gamepad" src="https://doom.sojo.gg/"></iframe></div>
+    <div class="dom">From doom.sojo.gg</div>
+    <div class="acts"><span>💬 <b>12</b></span><span>🔁 <b>48</b></span><span>♡ <b>310</b></span><span>📊 <b>9.4K</b></span><span>↗</span></div>
+  </div>
+</div>
+<div id="tag"><i></i>Running on Sojo · sojo.gg</div>
+<div class="full" id="intro">
+  <div class="big">DOOM</div>
+  <div class="sub">The original 1993 DOOM — playable inside an X post</div>
+  <div class="small">no download · no install · just tap</div>
+</div>
+<div class="full off" id="outro">
+  <div class="big" style="font-size:130px">PLAY IT</div>
+  <div class="url">doom.sojo.gg</div>
+  <div class="sub" style="font-size:38px">Right in your timeline. Built on Sojo — games inside X posts.</div>
+  <div class="small">sojo.gg</div>
+</div>
+<div id="cur"><svg width="34" height="34" viewBox="0 0 24 24"><path d="M3 2l7.5 19 2.6-7.9L21 10.5z" fill="#fff" stroke="#000" stroke-width="1.4" stroke-linejoin="round"/></svg></div>
+<script>
+// stage controls used by record.js
+window.stage = {
+  intro(on) { document.getElementById("intro").classList.toggle("off", !on) },
+  outro(on) { document.getElementById("outro").classList.toggle("off", !on) },
+  tag(on) { document.getElementById("tag").classList.toggle("on", on) },
+  cursor(x, y, show = true) { const c = document.getElementById("cur"); c.style.opacity = show ? 1 : 0; c.style.transform = `translate(${x}px,${y}px)` },
+  click() { const c = document.getElementById("cur"); c.classList.add("click"); setTimeout(() => c.classList.remove("click"), 180) },
+  cardBox() { const r = document.querySelector(".card").getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height } },
+};
+</script>
+</body>
+</html>

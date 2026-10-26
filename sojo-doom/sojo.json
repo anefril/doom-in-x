@@ -1,0 +1,7 @@
+{
+  "game": "doom",
+  "main": "worker/dist/index.js",
+  "assets": "public",
+  "kv": ["DATA"],
+  "card": { "title": "DOOM (1993)", "description": "Play the original DOOM right here.", "image": "/card-x.png", "player": "/", "width": 480, "height": 300 }
+}

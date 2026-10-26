@@ -1,0 +1,14 @@
+html,body{margin:0;background:#111;color:#ddd;font:14px system-ui,sans-serif}
+body.light{background:#f4f4f4;color:#222}
+main{display:flex;flex-wrap:wrap;gap:14px;padding:12px;align-items:flex-start}
+#stage{flex:0 0 auto}
+#cv{display:block;width:min(320px,calc(100vw - 24px));height:auto;aspect-ratio:1;image-rendering:pixelated;
+  border:3px solid #7a0e0e;background:#000;cursor:crosshair;touch-action:none}
+#side{flex:1 1 160px;min-width:150px}
+#hint{margin:0 0 10px;line-height:1.4}
+#pal{display:grid;grid-template-columns:repeat(8,26px);gap:5px}
+#pal button{width:26px;height:26px;border:2px solid #0006;border-radius:4px;padding:0;cursor:pointer}
+#pal button.on{outline:3px solid #fc3;outline-offset:1px}
+#sizes{margin-top:10px;display:flex;gap:6px}
+#sizes button{font:12px monospace;padding:4px 8px;border-radius:4px;border:1px solid #888;background:transparent;color:inherit;cursor:pointer}
+#sizes button.on{background:#e33;border-color:#e33;color:#fff}

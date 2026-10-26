@@ -1,0 +1,8 @@
+node_modules/
+sojo-doom/public/
+sojo-doom/worker/dist/
+sojo-doom/worker/adtool.gen.js
+sojo-doom/video/out/
+shot-*.png
+.env
+.env.*

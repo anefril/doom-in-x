@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>DOOM</title>
+<style>
+html,body{margin:0;height:100%;background:#000;overflow:hidden;font:bold 15px monospace;color:#fff;
+  -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent}
+#canvas{display:block;width:100%;height:100%;object-fit:contain;image-rendering:pixelated;outline:none}
+#ov{position:fixed;inset:0;z-index:5;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;
+  background:#000a;cursor:pointer;text-align:center}
+#ov b{font-size:26px;color:#e33;letter-spacing:2px}
+#ov small{color:#bbb;line-height:1.6}
+#ov.off{display:none}
+.top{position:fixed;top:6px;z-index:6;display:flex;gap:4px}
+.top a,.top button{color:#ddd;font:bold 12px monospace;background:#0009;border:1px solid #fff3;border-radius:4px;
+  padding:4px 7px;text-decoration:none;cursor:pointer}
+#tr{right:6px}
+/* touch controls: only in body.touch mode */
+.tc{display:none}
+body.touch .tc{display:block}
+body.touch #canvas{pointer-events:none}
+body.touch,body.touch *{touch-action:none}
+.stick{position:fixed;bottom:8px;width:110px;height:110px;border-radius:50%;background:#fff1;border:2px solid #fff4;z-index:4}
+.stick i{position:absolute;left:50%;top:50%;width:46px;height:46px;margin:-23px 0 0 -23px;border-radius:50%;background:#fff5;pointer-events:none}
+.stick span{position:absolute;left:0;right:0;top:-17px;text-align:center;font-size:10px;color:#fff8;pointer-events:none}
+#sl{left:8px}
+#sr{right:8px}
+.btn{position:fixed;z-index:4;border-radius:50%;background:#0007;border:2px solid #fff5;color:#fff;font:bold 12px monospace;
+  display:none;align-items:center;justify-content:center;padding:0}
+body.touch .btn{display:flex}
+.btn.on{background:#e338;border-color:#f66}
+#bfire{right:128px;bottom:20px;width:64px;height:64px;font-size:13px;border-color:#e33}
+#buse{right:128px;bottom:94px;width:48px;height:48px}
+#bwpn{left:128px;bottom:20px;width:48px;height:48px}
+#besc{left:6px;top:6px;width:36px;height:36px;border-radius:6px}
+#bent{left:48px;top:6px;width:36px;height:36px;border-radius:6px}
+</style>
+</head>
+<body>
+<canvas id="canvas" tabindex="0" oncontextmenu="event.preventDefault()"></canvas>
+<div id="ov"><b>LOADING…</b><small id="hint"></small></div>
+<div class="top" id="tr">
+  <button id="save" type="button" title="Save game">💾</button>
+  <button id="load" type="button" title="Load game">⟲</button>
+  <button id="mode" type="button" title="Switch PC / phone controls"></button>
+  <button id="full" type="button" title="Fullscreen">⤢ full</button>
+</div>
+<div class="stick tc" id="sl"><span>MOVE</span><i></i></div>
+<div class="stick tc" id="sr"><span>TURN</span><i></i></div>
+<button class="btn" id="bfire" type="button" data-k="Space">FIRE</button>
+<button class="btn" id="buse" type="button" data-k="Enter">USE</button>
+<button class="btn" id="bwpn" type="button" data-k="BracketRight">WPN</button>
+<button class="btn" id="besc" type="button" data-k="Escape">☰</button>
+<button class="btn" id="bent" type="button" data-k="Enter">✓</button>
+<script>
+const cv = document.getElementById("canvas"), ov = document.getElementById("ov"), title = ov.querySelector("b");
+
+// --- fullscreen like a video; if X didn't allow fullscreen — open in a tab ---
+const root = document.documentElement, fullBtn = document.getElementById("full");
+const fsEl = () => document.fullscreenElement || document.webkitFullscreenElement;
+const fsOk = !!(document.fullscreenEnabled || document.webkitFullscreenEnabled);
+fullBtn.addEventListener("click", () => {
+  if (fsEl()) return (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+  if (fsOk) {
+    const req = root.requestFullscreen || root.webkitRequestFullscreen;
+    Promise.resolve(req.call(root, { navigationUI: "hide" })).then(() => focusGame()).catch(() => open("/doom/", "_blank"));
+  } else open("/doom/", "_blank");
+});
+// top buttons must not take focus: otherwise SPACE (fire) would "press" them again
+for (const b of document.querySelectorAll(".top button")) {
+  b.addEventListener("mousedown", e => e.preventDefault());
+  b.addEventListener("click", () => { b.blur(); if (ov.classList.contains("off")) cv.focus({ preventScroll: true }) });
+}
+const fsLabel = () => { fullBtn.textContent = fsEl() ? "✕ exit" : "⤢ full" };
+document.addEventListener("fullscreenchange", fsLabel); document.addEventListener("webkitfullscreenchange", fsLabel);
+if (self === top && !fsOk) fullBtn.remove();
+// probe the X environment: what our iframe is allowed to do
+if (self !== top) try {
+  navigator.sendBeacon("/b", JSON.stringify({ id: "doom-env", fsOk,
+    feats: document.featurePolicy ? document.featurePolicy.allowedFeatures().filter(f => /full|pointer|gamepad|autoplay|keyboard/.test(f)) : null,
+    anc: [...(location.ancestorOrigins || [])].join(","), touch: matchMedia("(pointer: coarse)").matches, w: innerWidth, h: innerHeight }));
+} catch {}
+
+// --- synthetic keys for SDL (it reads code + keyCode) ---
+const KEYS = {
+  KeyW: ["w", 87], KeyA: ["a", 65], KeyS: ["s", 83], KeyD: ["d", 68], KeyE: ["e", 69],
+  ArrowUp: ["ArrowUp", 38], ArrowDown: ["ArrowDown", 40], ArrowLeft: ["ArrowLeft", 37], ArrowRight: ["ArrowRight", 39],
+  ShiftLeft: ["Shift", 16], Space: [" ", 32], Escape: ["Escape", 27], Enter: ["Enter", 13], BracketRight: ["]", 221],
+  F2: ["F2", 113], F3: ["F3", 114], KeyO: ["o", 79], KeyM: ["m", 77],
+};
+const fire = (type, code, key, keyCode, repeat = false) => {
+  const ev = new KeyboardEvent(type, { key, code, bubbles: true, cancelable: true, repeat });
+  for (const k of ["keyCode", "which"]) Object.defineProperty(ev, k, { get: () => keyCode });
+  dispatchEvent(ev);
+};
+// typing a character: SDL takes the save name from keypress (SDL_TEXTINPUT), not keydown
+const typeChar = (code, ch) => {
+  fire("keydown", code, ...KEYS[code]);
+  const ev = new KeyboardEvent("keypress", { key: ch, code, bubbles: true, cancelable: true });
+  for (const k of ["keyCode", "which", "charCode"]) Object.defineProperty(ev, k, { get: () => ch.charCodeAt(0) });
+  dispatchEvent(ev);
+  fire("keyup", code, ...KEYS[code]);
+};
+
+// --- audio: Emscripten wakes the AudioContext only on mousedown/keydown/touchstart, while our touch
+// controls cancel mousedown (preventDefault) and touchstart gives no user activation — wake it ourselves ---
+const wakeAudio = e => {
+  if (!e.isTrusted) return;
+  try { const c = Module.SDL2 && Module.SDL2.audioContext; if (c && c.state === "suspended") c.resume() } catch {}
+};
+for (const t of ["pointerup", "touchend", "click", "keydown"]) addEventListener(t, wakeAudio, true);
+
+// Keys have two sources: the real keyboard (held) and synthetic ones from sticks/buttons/edge (active).
+// While any source holds a key, SDL must see it pressed.
+const GAME = /^(Space|Arrow|Tab|Key[WASDE]|Enter|Escape|Shift|Control|Digit|Bracket|F[2369]$)/; // F2/F3 save/load, F6/F9 quick
+const MIRROR = { KeyW: "ArrowUp", KeyS: "ArrowDown" };     // DOOM menus scroll only with arrows
+const MIRROR_OF = { ArrowUp: "KeyW", ArrowDown: "KeyS" };
+const held = new Map();                                  // really held: code -> {key, keyCode}
+const want = new Map(), active = new Set();              // want: control id -> Set of codes; active — what's currently sent
+const physical = c => held.has(c) || (MIRROR_OF[c] && held.has(MIRROR_OF[c]));
+// capture on window registers before SDL's handlers — we get to filter first
+for (const type of ["keydown", "keyup"]) addEventListener(type, e => {
+  if (type === "keydown" && GAME.test(e.code)) e.preventDefault(); // game keys must not scroll the X feed
+  if (!e.isTrusted) return;
+  if (type === "keydown") held.set(e.code, { key: e.key, keyCode: e.keyCode }); else held.delete(e.code);
+  // "use" in the engine = Enter (one button opens doors and picks menu items).
+  // E on PC is swapped for Enter entirely: the letter itself would jump to "End Game" in the menu
+  if (e.code === "KeyE") { fire(type, "Enter", ...KEYS.Enter, e.repeat); e.stopImmediatePropagation(); return }
+  const m = MIRROR[e.code];
+  if (m && !(type === "keyup" && active.has(m))) fire(type, m, ...KEYS[m], e.repeat);
+  // a real keyup of a key the synthetic side still holds (frame edge etc.) is not passed to SDL
+  if (type === "keyup" && active.has(e.code)) e.stopImmediatePropagation();
+}, true);
+cv.addEventListener("wheel", e => e.preventDefault(), { passive: false });
+
+// --- synthetic: sync() sends the difference as keydown/keyup without touching what the real keyboard holds ---
+const sync = () => {
+  const next = new Set();
+  for (const s of want.values()) for (const c of s) next.add(c);
+  for (const c of active) if (!next.has(c) && !physical(c)) fire("keyup", c, ...KEYS[c]);
+  for (const c of next) if (!active.has(c) && !physical(c)) fire("keydown", c, ...KEYS[c]);
+  active.clear(); for (const c of next) active.add(c);
+};
+const setWant = (id, codes) => { want.set(id, new Set(codes)); sync() };
+
+// Analog sticks via PWM: DOOM keys are only on/off, so the share of ticks a key is held
+// = stick deflection. A little push — slow, all the way — the key is held constantly.
+// axes: stick id -> { hold: [codes held constantly], pwm: [[code, share 0..1], …] }
+const axes = new Map(), acc = new Map();
+const TICK_MS = 28;                                    // ~35 Hz — DOOM's game tick
+setInterval(() => {
+  for (const [id, a] of axes) {
+    const codes = [...a.hold];
+    for (const [c, duty] of a.pwm) {
+      let v = (acc.get(c) || 0) + duty;
+      if (v >= 1) { codes.push(c); v -= 1 }
+      acc.set(c, v);
+    }
+    setWant(id, codes);
+  }
+}, TICK_MS);
+// deflection -> share: dead zone in the centre, full speed slightly before the edge, a soft curve for precision
+const curve = (v, dz) => { const a = Math.abs(v); return a <= dz ? 0 : Math.min(1, (a - dz) / (0.9 - dz)) ** 1.6 };
+
+// capturing the finger is nice to have, not required: InvalidStateError happens (the finger is already gone),
+// and it used to abort the whole touch handling
+const capture = (el, id) => { try { el.setPointerCapture(id) } catch {} };
+
+function stick(el, map) {
+  const knob = el.querySelector("i");
+  let pid = null;
+  const move = e => {
+    const r = el.getBoundingClientRect(), R = r.width / 2;
+    let x = (e.clientX - r.left - R) / R, y = (e.clientY - r.top - R) / R;
+    const m = Math.hypot(x, y); if (m > 1) { x /= m; y /= m }
+    knob.style.transform = `translate(${x * R * 0.6}px,${y * R * 0.6}px)`;
+    axes.set(el.id, map(x, y, Math.min(m, 1)));
+  };
+  const end = e => {
+    if (e.pointerId !== pid) return;
+    pid = null; knob.style.transform = "";
+    axes.delete(el.id); setWant(el.id, []);
+  };
+  el.addEventListener("pointerdown", e => { e.preventDefault(); pid = e.pointerId; capture(el, pid); focusGame(); move(e) });
+  el.addEventListener("pointermove", e => { if (e.pointerId === pid) move(e) });
+  el.addEventListener("pointerup", end); el.addEventListener("pointercancel", end);
+}
+stick(document.getElementById("sl"), (x, y, m) => {
+  const hold = [], pwm = [];
+  if (y < 0) pwm.push(["KeyW", curve(y, 0.15)]); else pwm.push(["KeyS", curve(y, 0.15)]);
+  if (x < 0) pwm.push(["KeyA", curve(x, 0.2)]); else pwm.push(["KeyD", curve(x, 0.2)]);
+  if (y < -0.5) hold.push("ArrowUp"); else if (y > 0.5) hold.push("ArrowDown"); // menus: no PWM, otherwise the cursor jumps
+  if (m > 0.97) hold.push("ShiftLeft");                                           // all the way — run
+  return { hold, pwm };
+});
+stick(document.getElementById("sr"), (x) => ({
+  hold: [], pwm: [[x < 0 ? "ArrowLeft" : "ArrowRight", curve(x, 0.12)]],
+}));
+for (const b of document.querySelectorAll(".btn")) {
+  const on = e => { e.preventDefault(); capture(b, e.pointerId); b.classList.add("on"); focusGame(); setWant(b.id, [b.dataset.k]) };
+  const off = () => { b.classList.remove("on"); setWant(b.id, []) };
+  b.addEventListener("pointerdown", on);
+  b.addEventListener("pointerup", off); b.addEventListener("pointercancel", off);
+  b.addEventListener("contextmenu", e => e.preventDefault());
+}
+
+// --- PC: mouse at the edge / past the iframe frame — keep turning that way ---
+// the browser doesn't report movement outside the iframe, and X forbids pointer lock
+const EDGE = 4; // px from the edge (in fullscreen the cursor stops at the screen edge)
+let lastX = innerWidth / 2, edgeDir = 0;
+const edgeTurn = dir => {                              // mousemove is frequent — recompute only when the direction changes
+  if (dir === edgeDir) return;
+  edgeDir = dir;
+  setWant("edge", dir < 0 ? ["ArrowLeft"] : dir > 0 ? ["ArrowRight"] : []);
+};
+const playing = () => !document.body.classList.contains("touch") && ov.classList.contains("off");
+addEventListener("mousemove", e => {
+  lastX = e.clientX;
+  if (!playing()) return edgeTurn(0);
+  edgeTurn(e.clientX <= EDGE ? -1 : e.clientX >= innerWidth - 1 - EDGE ? 1 : 0);
+});
+document.addEventListener("mouseleave", () => {
+  // left through a side — keep turning that way; through top/bottom — stop
+  if (!playing()) return edgeTurn(0);
+  edgeTurn(lastX < innerWidth * 0.2 ? -1 : lastX > innerWidth * 0.8 ? 1 : 0);
+});
+document.addEventListener("mouseenter", () => edgeTurn(0));
+
+// --- focus lost: release everything, show the title screen ---
+const releaseAll = () => {
+  for (const [code, k] of held) { fire("keyup", code, k.key, k.keyCode); if (MIRROR[code]) fire("keyup", MIRROR[code], ...KEYS[MIRROR[code]]) }
+  held.clear();
+  axes.clear(); acc.clear();
+  want.clear(); edgeDir = 0; sync();
+  for (const el of document.querySelectorAll(".stick i")) el.style.transform = "";
+  for (const b of document.querySelectorAll(".btn.on")) b.classList.remove("on");
+};
+// The game starts straight in E1M1 (-warp in callMain), no menu to go through. Key sequences
+// through the menu got lost on a real iPhone: the engine starts slower there and the timing missed.
+const sleep = ms => new Promise(s => setTimeout(s, ms));
+const press = async code => { fire("keydown", code, ...KEYS[code]); await sleep(90); fire("keyup", code, ...KEYS[code]) };
+// don't hide the title screen until the game has loaded — otherwise a black screen without "CLICK TO PLAY"
+const focusGame = () => { cv.focus({ preventScroll: true }); if (ready) ov.classList.add("off") };
+// phone: a tap on the game picture (anything but sticks, buttons and the panel) = Enter — picks a menu item
+const CONTROLS = ".stick, .btn, .top, #ov";
+document.addEventListener("pointerdown", e => {
+  dbgTap(e);
+  if (!document.body.classList.contains("touch") || !ready || !ov.classList.contains("off")) return;
+  if (e.target.closest && e.target.closest(CONTROLS)) return;
+  e.preventDefault(); press("Enter");
+}, true);
+
+// --- diagnostics from real devices: where taps land and whether the engine reached frames ---
+const dbg = { taps: [], keys: 0, mainLoop: false };
+const dbgTap = e => { if (dbg.taps.length < 25) dbg.taps.push(`${e.pointerType}:${(e.target.id || e.target.tagName || "?").toString().toLowerCase()}`) };
+addEventListener("keydown", () => dbg.keys++, true);
+const dbgSend = why => { try { navigator.sendBeacon("/b", JSON.stringify({ id: "doom-dbg", why, mode, ready, failed, ...dbg, ua: navigator.userAgent.slice(0, 140) })) } catch {} };
+setTimeout(() => dbgSend("t30"), 30000);
+addEventListener("pagehide", () => dbgSend("hide"));
+let failed = false;
+// no preventDefault for the mouse: Emscripten wakes the AudioContext on mousedown
+ov.addEventListener("pointerdown", e => {
+  if (e.pointerType !== "mouse") e.preventDefault();
+  if (failed) return location.reload();
+  focusGame();
+});
+cv.addEventListener("mousedown", () => cv.focus({ preventScroll: true }));
+addEventListener("blur", () => { releaseAll(); ov.classList.remove("off") });
+
+// --- PC / phone mode: auto by screen type, the switch is remembered ---
+const store = { get() { try { return localStorage.getItem("doom.mode") } catch { return null } },
+                set(v) { try { localStorage.setItem("doom.mode", v) } catch {} } };
+const hint = document.getElementById("hint"), modeBtn = document.getElementById("mode");
+let ready = false;
+function setMode(m) {
+  document.body.classList.toggle("touch", m === "touch");
+  modeBtn.textContent = m === "touch" ? "🖥 PC" : "📱 Phone";
+  hint.innerHTML = m === "touch"
+    ? "Left stick — move (push fully to run) · Right — turn<br>FIRE · USE — open doors &amp; select in menu<br>WPN — next weapon · ☰ — menu · 💾 / ⟲ — save / load"
+    : "WASD — move · MOUSE or ←/→ — turn<br>CLICK / SPACE — fire · RMB / E / ENTER — open &amp; select<br>SHIFT — run · 💾 / ⟲ or F2 / F3 — save / load";
+  if (ready && !failed) title.textContent = m === "touch" ? "TAP TO PLAY" : "CLICK TO PLAY";
+  releaseAll();
+}
+// loading failed (network, 404 after a deploy, an old WebView without WASM) — don't hang on LOADING… forever
+function loadFailed(why) {
+  if (failed || ready) return;
+  failed = true;
+  console.warn("DOOM load failed:", why);
+  title.textContent = "LOAD FAILED";
+  hint.innerHTML = (mode === "touch" ? "Tap" : "Click") + " to retry";
+  ov.classList.remove("off");
+}
+setTimeout(() => loadFailed("timeout"), 45000);
+// this Emscripten build doesn't call onAbort when fetch(wasm) drops — the promise just rejects;
+// before the game starts any such error = loading failed (after the start loadFailed does nothing)
+addEventListener("unhandledrejection", e => loadFailed(e.reason));
+addEventListener("error", e => loadFailed(e.message));
+// --- saves ---
+// A build without IDBFS: saves live in the tab's memory. We copy them to IndexedDB and restore them to FS on start.
+// If storage is unavailable (private mode, X blocking cookies) — saves just live until the tab closes.
+const SAVE_DIR = "/libsdl/doom-ws-wasm/savegames";
+const idb = (() => {
+  let dbp = null;
+  const open = () => dbp || (dbp = new Promise((ok, no) => {
+    const r = indexedDB.open("doom-saves", 1);
+    r.onupgradeneeded = () => r.result.createObjectStore("files");
+    r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error);
+  }));
+  const tx = async (mode, fn) => { const db = await open(); return new Promise((ok, no) => {
+    const t = db.transaction("files", mode), s = t.objectStore("files"), res = fn(s);
+    t.oncomplete = () => ok(res && res.result); t.onerror = () => no(t.error);
+  }) };
+  return {
+    all: () => tx("readonly", s => { const out = {}; const c = s.openCursor(); c.onsuccess = () => { const cur = c.result; if (cur) { out[cur.key] = cur.value; cur.continue() } }; return { get result() { return out } } }),
+    put: (k, v) => tx("readwrite", s => s.put(v, k)),
+  };
+})();
+function restoreSaves() {
+  Module.addRunDependency("saves");
+  // a stuck IndexedDB (happens in in-app browsers) must not hold up the game start
+  Promise.race([idb.all(), sleep(3000).then(() => { throw new Error("idb timeout") })]).then(files => {
+    for (const [rel, data] of Object.entries(files || {})) {   // rel = «doom.wad/doomsav0.dsg»
+      if (!/^[\w.-]+(\/[\w.-]+)*$/.test(rel) || rel.includes("..")) continue;
+      const path = `${SAVE_DIR}/${rel}`;
+      Module.FS.mkdirTree(path.slice(0, path.lastIndexOf("/")));
+      Module.FS.writeFile(path, data);
+    }
+  }).catch(e => console.warn("saves restore:", e)).finally(() => Module.removeRunDependency("saves"));
+}
+const seen = {};                                        // relative path -> mtime, write only what changed
+function persistSaves() {
+  if (!ready) return;
+  // Chocolate Doom puts saves into a folder named after the IWAD: savegames/doom.wad/doomsav0.dsg
+  const walk = (dir, rel) => {
+    let names; try { names = Module.FS.readdir(dir) } catch { return }   // no folder yet — there were no saves
+    for (const n of names) {
+      if (n === "." || n === "..") continue;
+      const path = `${dir}/${n}`, r = rel ? `${rel}/${n}` : n, st = Module.FS.stat(path);
+      if (Module.FS.isDir(st.mode)) { walk(path, r); continue }
+      if (!/\.dsg$/.test(n) || seen[r] === st.mtime.getTime()) continue;
+      seen[r] = st.mtime.getTime();
+      idb.put(r, Module.FS.readFile(path)).catch(e => console.warn("save persist:", e));
+    }
+  };
+  walk(SAVE_DIR, "");
+}
+setInterval(persistSaves, 2000);
+addEventListener("pagehide", persistSaves);
+
+// 💾 / ⟲: we drive DOOM's menu ourselves — a phone has no keyboard for the save name.
+// F2 = save menu (cursor on the last slot) → Enter (slot) → name "DOOM" → Enter. F3 → Enter = load.
+let busy = false;
+async function macro(steps) {
+  if (busy || !ready) return;
+  busy = true; releaseAll(); focusGame();
+  try { for (const s of steps) { await s(); await sleep(160) } } finally { busy = false }
+}
+document.getElementById("save").addEventListener("click", () => macro([
+  () => press("F2"), () => press("Enter"),
+  () => typeChar("KeyD", "D"), () => typeChar("KeyO", "O"), () => typeChar("KeyO", "O"), () => typeChar("KeyM", "M"),
+  () => press("Enter"), () => sleep(600), persistSaves,
+]));
+document.getElementById("load").addEventListener("click", () => macro([() => press("F3"), () => press("Enter")]));
+
+let mode = store.get() || (matchMedia("(pointer: coarse)").matches ? "touch" : "pc");
+setMode(mode);
+modeBtn.addEventListener("click", () => { mode = mode === "touch" ? "pc" : "touch"; store.set(mode); setMode(mode) });
+
+var Module = {
+  noInitialRun: true,
+  canvas: cv,
+  onAbort: what => loadFailed(what),
+  onRuntimeInitialized: () => {
+    if (failed) return;
+    ready = true; setMode(mode);
+    callMain(["-iwad", "doom1.wad", "-window", "-nogui", "-nomusic", "-config", "default.cfg", "-extraconfig", "extra.cfg",
+      "-skill", "3", "-warp", "1", "1"]);                // straight to E1M1, "Hurt me plenty" — no demo, no menu
+  },
+  preRun: () => {
+    for (const f of ["doom1.wad", "default.cfg", "extra.cfg"]) Module.FS.createPreloadedFile("", f, f, true, true);
+    restoreSaves();                                    // saves from IndexedDB go into FS before the engine starts
+  },
+  print: t => { if (/set_main_loop/.test(t)) dbg.mainLoop = true; console.log(t) },
+  printErr: t => console.warn(t),
+  setStatus: () => {},
+};
+</script>
+<script src="websockets-doom.js" onerror="loadFailed('script')"></script>
+</body>
+</html>
