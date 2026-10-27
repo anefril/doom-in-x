@@ -11,8 +11,18 @@
   const X_HANDLE = "NukeKevDev";
 
   // clicks on our title-screen buttons must not start the game: the screen starts it on pointerdown
-  for (const el of [btnIn, $("sj"), $("ad")]) el.addEventListener("pointerdown", e => e.stopPropagation());
+  for (const el of [btnIn, $("sj"), $("ad"), $("lb"), $("help")]) el.addEventListener("pointerdown", e => e.stopPropagation());
   const onClick = (el, fn) => el.addEventListener("click", e => { e.stopPropagation(); fn(e) });
+  onClick($("help"), () => ov.classList.toggle("help"));   // controls: shown while toggled on
+  // Emscripten asks for pointer lock on any click once the game wants the mouse. A click on our buttons must not lock it:
+  // locked, every next click goes to the game, not to the buttons
+  const OURS = "#who, #sj, #lb, #ad, #fin, #help, #menu, #full";
+  const lock = cv.requestPointerLock;
+  cv.requestPointerLock = function (...a) {
+    const t = window.event && window.event.target;
+    if (t && t.closest && t.closest(OURS)) return;
+    return lock.apply(this, a);
+  };
 
   // --- game server (worker/src.js): the player token is verified there ---
   const api = async (path, body = {}) => {
@@ -55,14 +65,14 @@
   Object.assign(KEYS, { KeyI: ["i", 73], KeyK: ["k", 75], KeyF: ["f", 70] });
   const cheat = word => macro([...word].map(ch => () => press("Key" + ch.toUpperCase())));
   onClick(bIdkfa, async () => {
-    if (owned.includes("idkfa")) { cheat("idkfa"); sojo.track("doom.cheat", { code: "idkfa" }); return }
+    if (owned.includes("idkfa")) { cheated = true; cheat("idkfa"); sojo.track("doom.cheat", { code: "idkfa" }); return }
     if (!order) return;
     const r = await sojo.spend({ amount: order.amount, item: order.item, ref: order.ref });
     if (!r) return;                                       // not confirmed or closed
     try {
       const g = await api("/api/receipt", { receipt: r.receipt });
       owned = g.owned || []; order = null; drawMe();
-      cheat("idkfa"); sojo.track("doom.cheat", { code: "idkfa" });
+      cheated = true; cheat("idkfa"); sojo.track("doom.cheat", { code: "idkfa" });
     } catch (e) { console.warn("receipt:", e.message) }
   });
 
@@ -79,6 +89,7 @@
   let started = false;
   const sync = () => {
     const playing = ov.classList.contains("off");
+    document.body.classList.toggle("playing", playing);   // shows ☰ (build.js CSS)
     sojo.ui(!playing);
     if (playing && !started) { started = true; sojo.track("play_start") }
     adVisibility();
@@ -124,7 +135,7 @@
   loadFills();
   setInterval(loadFills, 60000);                          // onChange doesn't hear an ad pulled mid-hour
 
-  // --- E1M1 speedrun: the timer and the finish are read from the engine's memory ---
+  // --- speedrun: the timer and the finish are read from the engine's memory ---
   // Addresses are for this websockets-doom.wasm build (found with wasm-dis): G_DoCompleted writes into wminfo
   // (946036) the episode (+0, zero-based), the map (+8, zero-based) and player 0's stime (+56) = leveltime (955996), 35 tics/s.
   // Swap the engine build — re-check the addresses.
@@ -132,45 +143,140 @@
   const heap = () => (window.Module && Module.HEAP32) || null;
   const fmt = t => { const s = t / 35, m = Math.floor(s / 60); return `${m}:${(s - m * 60).toFixed(2).padStart(5, "0")}` };
   const tmr = $("tmr"), fin = $("fin"), finT = $("fin-t"), finS = $("fin-s"), finPost = $("fin-post"), finIn = $("fin-in");
-  const lbList = $("lb-list"), lbMe = $("lb-me");
-  let lastStime = 0, run = null;                          // run = {map, tics} of the last finish
+  const lbList = $("lb-list"), lbMe = $("lb-me"), lbName = $("lb-name");
+  // boards: every map of Episode 1 and "e1" — the whole episode in one go (worker/src.js, RUN_MAPS)
+  const BOARDS = ["e1m1", "e1m2", "e1m3", "e1m4", "e1m5", "e1m6", "e1m7", "e1m8", "e1m9", "e1"];
+  const title = m => m === "e1" ? "Episode 1" : m.toUpperCase();
+  // the episode route: E1M3 may exit to the secret E1M9, which leads back to E1M4
+  const NEXT = { 1: [2], 2: [3], 3: [4, 9], 4: [5], 5: [6], 6: [7], 7: [8], 9: [4] };
+  let lastStime = 0, lastLt = 0, ep = null;               // ep = {last, tics, ticket} of the episode run in progress
+  let ticket = null;                                      // the server's signed start time of the current level (worker: checkTicket)
+  // a ticket is only as early as its request: a failed one is retried at once, not left empty (bad_ticket on finish)
+  const getTicket = async (tries = 3) => {
+    for (let i = 0; i < tries; i++) {
+      try { const j = await (await fetch("/api/ticket")).json(); if (j.ticket) return j.ticket } catch {}
+      await new Promise(r => setTimeout(r, 300));
+    }
+    return null;
+  };
+  // the first level starts with the page (-warp): a ticket taken now is no later than its start
+  getTicket().then(t => { ticket = ticket || t });
 
-  function drawBoard(top, mine) {
-    if (top && top.length) lbList.innerHTML = top.slice(0, 5).map(r =>
-      `<li>@${esc(r.handle || "anon")}<i>${fmt(r.tics)}</i></li>`).join("");
-    if (mine) lbMe.textContent = `your best: ${fmt(mine.best)} · #${mine.rank}`;
+  // cheats: once one is typed (or IDKFA bought), runs of this session aren't ranked — god mode and the rest stay on
+  // through the next levels, and only a reload is surely clean. Our own macros dispatch on window too, so they're caught
+  const CHEATS = ["iddqd", "idkfa", "idfa", "idclip", "idspispopd", "idclev", "idbehold", "idchoppers"];
+  let cheated = false, typed = "";
+  addEventListener("keydown", e => {
+    if (!e.key || e.key.length !== 1) return;
+    typed = (typed + e.key.toLowerCase()).slice(-12);
+    if (CHEATS.some(c => typed.includes(c))) cheated = true;
+  }, true);
+  let runs = [], saved = false;                           // runs = [{map, tics}] of the last finish (+ the episode on E1M8)
+  let shown = "e1m1";
+  const tops = {}, mine = {};                             // map → public top / this player's {best, rank}
+
+  function drawBoard() {
+    lbName.textContent = title(shown).toUpperCase();
+    const top = tops[shown];
+    lbList.innerHTML = !top ? '<li class="dim">…</li>' : !top.length ? '<li class="dim">no runs yet — be first</li>' :
+      top.slice(0, 10).map(r => {
+        const h = r.handle || "anon", av = r.pfp ? `<img src="${esc(r.pfp)}" alt="">` : `<span class="av">${esc(h[0].toUpperCase())}</span>`;
+        return `<li${r.royal ? ' class="royal"' : ""}>${av}<span class="h">${r.royal ? "👑 " : ""}@${esc(h)}</span><i>${fmt(r.tics)}</i></li>`;
+      }).join("");
+    const m = mine[shown];
+    lbMe.textContent = m ? `your best: ${fmt(m.best)} · #${m.rank}` : "";
   }
-  const loadBoard = () => fetch("/api/leaderboard?map=e1m1").then(r => r.json()).then(j => drawBoard(j.top)).catch(() => {});
-  loadBoard();
+  const showBoard = map => {
+    shown = map; drawBoard();
+    fetch("/api/leaderboard?map=" + map).then(r => r.json()).then(j => { if (j.top) { tops[map] = j.top; drawBoard() } }).catch(() => {});
+  };
+  const step = d => showBoard(BOARDS[(BOARDS.indexOf(shown) + d + BOARDS.length) % BOARDS.length]);
+  onClick($("lb-prev"), () => step(-1));
+  onClick($("lb-next"), () => step(1));
+  const lbBox = $("lb");
+  onClick($("lb-open"), () => { lbBox.hidden = false; showBoard(shown) });
+  onClick($("lb-x"), () => { lbBox.hidden = true });
+  // a click past the open leaderboard closes it instead of starting the game (capture runs before index.html's listener)
+  ov.addEventListener("pointerdown", e => { if (!lbBox.hidden) { lbBox.hidden = true; e.stopImmediatePropagation() } }, true);
+  showBoard("e1m1");
+
+  // --- ☰ in the game, or ESC letting the mouse go: pause and back to the title screen; a click into the game resumes.
+  // DOOM's Pause key freezes the world and its clock, so a speedrun loses nothing while the menu is up
+  let pausedByUs = false;
+  const openMenu = () => {
+    if (!ready || !ov.classList.contains("off")) return;
+    if (!pausedByUs) { pausedByUs = true; press("Pause") }
+    ov.classList.remove("off");
+  };
+  onClick($("menu"), openMenu);
+  ov.addEventListener("pointerdown", () => { if (pausedByUs) { pausedByUs = false; lbBox.hidden = true; press("Pause") } });
+  document.addEventListener("pointerlockchange", () => { if (!document.pointerLockElement) openMenu() });
 
   async function submit() {
-    if (!run) return;
+    if (!runs.length || saved) return;
+    if (cheated) { finS.textContent = "cheats were on — not ranked (reload for a clean run)"; return }
     if (!me) { finS.textContent = "sign in to put it on the leaderboard"; finIn.hidden = false; return }
     finIn.hidden = true; finS.textContent = "saving…";
+    saved = true;                                         // sign-in fires submit twice — send once
+    // the post links to this run's card (/r/<id>), which exists only once the run is saved: wait for it
+    finPost.disabled = true; finPost.textContent = "saving…";
     try {
-      const r = await api("/api/run", run);
+      for (const run of runs) {
+        const r = await api("/api/run", run);
+        mine[run.map] = r; tops[run.map] = r.top;
+      }
+      const head = runs[runs.length - 1], r = mine[head.map];
       finS.textContent = r.improved ? `new personal best · rank #${r.rank}` : `best ${fmt(r.best)} · rank #${r.rank}`;
-      drawBoard(r.top, r);
-    } catch (e) { finS.textContent = "couldn't save: " + e.message }
+      showBoard(head.map);
+    } catch (e) { saved = false; finS.textContent = "couldn't save: " + e.message }
+    finally { finPost.disabled = false; finPost.textContent = "Post my time" }
   }
+
+  $("load").addEventListener("click", () => { ep = null });   // a loaded save isn't a run in one go
+  // the engine starts E1M1 (-warp) as soon as it loads and its clock runs behind the title screen: the time before
+  // the first click into the game is the player's waiting, not the run — it's taken off that level's time
+  let idle = 0, clicked = false;
+  new MutationObserver(() => {
+    const H = heap();
+    if (clicked || !H || !ov.classList.contains("off")) return;
+    clicked = true;
+    if (!H[WM_STIME >> 2]) idle = H[LEVELTIME >> 2];      // still in the first level
+  }).observe(ov, { attributes: true, attributeFilter: ["class"] });
 
   setInterval(() => {
     const H = heap();
     if (!H) return;
     const playing = ov.classList.contains("off");
+    const lt = H[LEVELTIME >> 2];
     tmr.hidden = !playing;
-    if (playing) tmr.textContent = "⏱ " + fmt(H[LEVELTIME >> 2]);
-    const st = H[WM_STIME >> 2];
+    if (playing) tmr.textContent = "⏱ " + fmt(Math.max(0, lt - idle));
+    // the clock jumped back to a later point than a restart after death — a save was loaded from DOOM's own menu
+    if (lt < lastLt - 35 && lt > 70) ep = null;
+    // the clock went back — a level began (or restarted after death, or a save was loaded): a ticket for its start.
+    // No "just started" window: a slow tab samples rarely and would miss it. A ticket taken late only makes the
+    // run look faster than real time if it was a loaded save — then the server rejects it, which is right
+    if (lt < lastLt) {
+      idle = 0;                                           // a new level (or a restart) — the title-screen wait is behind
+      ticket = null; getTicket().then(t => { ticket = t });
+    }
+    lastLt = lt;
+    let st = H[WM_STIME >> 2];
     if (st && st !== lastStime) {                         // G_DoCompleted filled in new results — level finished
       lastStime = st;
-      const map = `e${H[WM_EPSD >> 2] + 1}m${H[WM_LAST >> 2] + 1}`;
+      st = Math.max(1, st - idle); idle = 0;
+      const e = H[WM_EPSD >> 2] + 1, n = H[WM_LAST >> 2] + 1, map = `e${e}m${n}`;
       sojo.track("doom.level_done", { map, tics: st });
-      if (map === "e1m1") {
-        run = { map, tics: st };
-        finT.textContent = `🏁 E1M1 — ${fmt(st)}`;
-        fin.hidden = false;
-        submit();
-      }
+      if (e !== 1) return;                                // the shareware WAD has only Episode 1; boards are for it
+      if (n === 1) ep = { last: 1, tics: st, ticket };
+      else if (ep && NEXT[ep.last].includes(n)) { ep.last = n; ep.tics += st }
+      else ep = null;
+      runs = [{ map, tics: st, ticket }]; saved = false;
+      if (n === 8 && ep) { runs.push({ map: "e1", tics: ep.tics, ticket: ep.ticket }); ep = null }
+      const head = runs[runs.length - 1];
+      finPost.hidden = cheated;
+      finT.textContent = runs.length > 1 ? `🏁 Episode 1 — ${fmt(head.tics)}` : `🏁 ${title(map)} — ${fmt(st)}`;
+      fin.hidden = false;
+      submit();
     }
   }, 100);
 
@@ -179,12 +285,21 @@
   onClick($("fin-x"), () => { fin.hidden = true; backToGame() });
   onClick(finIn, async () => { await sojo.signIn(); setTimeout(submit, 1500); backToGame() });
   onClick(finPost, () => {
-    if (!run) return;
-    sojo.x.post({ text: `I beat E1M1 in ${fmt(run.tics)} in DOOM — played right inside an X post 🏁 Can you beat it?`, url: location.origin });
-    sojo.track("doom.run_posted", { tics: run.tics });
+    if (!runs.length) return;
+    const head = runs[runs.length - 1], r = mine[head.map];
+    // saved: the post (and its card) shows the player's best and place, even after a slower run
+    const what = head.map === "e1" ? "all of Episode 1" : head.map.toUpperCase(), t = fmt(r && r.best ? r.best : head.tics);
+    const text = r && r.rank === 1
+      ? `👑 WORLD #1: ${what} in ${t} on the DOOM speedrun board.\n\nThe original 1993 DOOM, playable right inside this post. Come take my crown 👇`
+      : r && r.rank
+      ? `🩸 ${what} in ${t} — #${r.rank} on the DOOM speedrun board.\n\nThe original 1993 DOOM, playable right inside this post. Think you're faster? 👇`
+      : `🔥 Just ripped through ${what} in ${t} in the original DOOM — right inside an X post.\n\nYour turn 👇`;
+    // the share link carries this run's picture as the card (worker/share.js); not signed in — the plain game link
+    sojo.x.post({ text, url: r && r.share ? location.origin + "/r/" + r.share : location.origin });
+    sojo.track("doom.run_posted", { map: head.map, tics: head.tics });
   });
   // signed in after finishing — save the run already shown
-  sojo.onChange(next => { if (next && run && !fin.hidden) setTimeout(submit, 1500) });
+  sojo.onChange(next => { if (next && runs.length && !fin.hidden) setTimeout(submit, 1500) });
 
   sync();
 })();
